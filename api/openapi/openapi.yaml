@@ -1,0 +1,365 @@
+openapi: 3.0.3
+info:
+  title: 场地安全隐患分级升级 API
+  version: 1.0.0
+  description: 离线场地巡检、分级升级、处置、复检、通知和审计接口。
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: Catalog
+  - name: Hazards
+  - name: Rules
+  - name: Remediation
+  - name: Operations
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        '200': {description: 服务存活}
+  /readyz:
+    get:
+      operationId: ready
+      responses:
+        '200': {description: 仓储可用}
+        '500': {$ref: '#/components/responses/Error'}
+  /api/v1/sites:
+    post:
+      tags: [Catalog]
+      operationId: createSite
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '201': {$ref: '#/components/responses/Object'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/facilities:
+    post:
+      tags: [Catalog]
+      operationId: createFacility
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '201': {$ref: '#/components/responses/Object'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/risk-categories:
+    post:
+      tags: [Catalog]
+      operationId: createRiskCategory
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '201': {$ref: '#/components/responses/Object'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/escalation-rules:
+    get:
+      tags: [Rules]
+      operationId: listEscalationRules
+      responses:
+        '200': {$ref: '#/components/responses/List'}
+    post:
+      tags: [Rules]
+      operationId: createEscalationRule
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '201': {$ref: '#/components/responses/Object'}
+        '403': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/escalation-rules/{id}:
+    put:
+      tags: [Rules]
+      operationId: reviseEscalationRule
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '200': {$ref: '#/components/responses/Object'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/inspections:
+    post:
+      tags: [Hazards]
+      operationId: createInspection
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '201': {$ref: '#/components/responses/Object'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/attachments:
+    post:
+      tags: [Hazards]
+      operationId: uploadAttachment
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+      responses:
+        '201': {$ref: '#/components/responses/Object'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards:
+    post:
+      tags: [Hazards]
+      operationId: reportHazard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReportHazard'}
+      responses:
+        '201': {$ref: '#/components/responses/Hazard'}
+        '409': {$ref: '#/components/responses/Error'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}:
+    get:
+      tags: [Hazards]
+      operationId: getHazard
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+      responses:
+        '200': {$ref: '#/components/responses/Hazard'}
+        '404': {$ref: '#/components/responses/Error'}
+  /api/v1/hazard-queues:
+    get:
+      tags: [Hazards]
+      operationId: listHazardQueue
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {name: queue, in: query, schema: {type: string, enum: [normal, focus]}}
+        - {name: state, in: query, schema: {type: string}}
+        - {name: risk_level, in: query, schema: {type: string}}
+        - {name: site_id, in: query, schema: {type: string}}
+        - {name: owner_id, in: query, schema: {type: string}}
+        - {name: overdue, in: query, schema: {type: boolean, default: false}}
+        - {name: sort, in: query, schema: {type: string, enum: [due_at, created_at, risk_score, updated_at], default: due_at}}
+        - {name: descending, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200': {$ref: '#/components/responses/Page'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}/downgrade:
+    post:
+      tags: [Hazards]
+      operationId: downgradeHazard
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '200': {$ref: '#/components/responses/Hazard'}
+        '403': {$ref: '#/components/responses/Error'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}/assign:
+    post:
+      tags: [Hazards]
+      operationId: assignHazard
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '200': {$ref: '#/components/responses/Hazard'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}/transitions:
+    post:
+      tags: [Hazards]
+      operationId: transitionHazard
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '200': {$ref: '#/components/responses/Hazard'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}/remediation-plan:
+    put:
+      tags: [Remediation]
+      operationId: saveRemediationPlan
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '200': {$ref: '#/components/responses/Object'}
+        '201': {$ref: '#/components/responses/Object'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}/remediation-tasks/{task_id}/complete:
+    post:
+      tags: [Remediation]
+      operationId: completeRemediationTask
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {name: task_id, in: path, required: true, schema: {type: string}}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '200': {$ref: '#/components/responses/Object'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}/reinspections:
+    post:
+      tags: [Remediation]
+      operationId: reinspectHazard
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      requestBody: {$ref: '#/components/requestBodies/JSONBody'}
+      responses:
+        '201': {$ref: '#/components/responses/Hazard'}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/notifications/process-due:
+    post:
+      tags: [Operations]
+      operationId: processDueNotifications
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 50}}
+      responses:
+        '200': {$ref: '#/components/responses/Object'}
+  /api/v1/hazards/{id}/notifications/acknowledge:
+    post:
+      tags: [Operations]
+      operationId: acknowledgeNotification
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/IfMatch'}
+      responses:
+        '204': {description: 已确认}
+        '409': {$ref: '#/components/responses/Error'}
+  /api/v1/analytics/queue-comparison:
+    get:
+      tags: [Operations]
+      operationId: compareQueues
+      parameters:
+        - {name: from, in: query, required: true, schema: {type: string, format: date-time}}
+        - {name: to, in: query, required: true, schema: {type: string, format: date-time}}
+      responses:
+        '200': {$ref: '#/components/responses/Object'}
+        '422': {$ref: '#/components/responses/Error'}
+  /api/v1/hazards/{id}/audit:
+    get:
+      tags: [Operations]
+      operationId: listHazardAudit
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+      responses:
+        '200': {$ref: '#/components/responses/Page'}
+  /api/v1/hazards/{id}/audit.csv:
+    get:
+      tags: [Operations]
+      operationId: exportHazardAudit
+      parameters:
+        - {$ref: '#/components/parameters/ID'}
+      responses:
+        '200':
+          description: UTF-8 CSV 审计报告
+          content:
+            text/csv:
+              schema: {type: string}
+components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: 当前资源版本号
+      schema: {type: integer, minimum: 1}
+    Page:
+      name: page
+      in: query
+      schema: {type: integer, minimum: 1, default: 1}
+    PageSize:
+      name: page_size
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+  requestBodies:
+    JSONBody:
+      required: true
+      content:
+        application/json:
+          schema: {type: object, additionalProperties: true}
+  responses:
+    Object:
+      description: 业务对象
+      content:
+        application/json:
+          schema: {type: object, additionalProperties: true}
+    List:
+      description: 业务对象列表
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [items, total]
+            properties:
+              items: {type: array, items: {type: object, additionalProperties: true}}
+              total: {type: integer}
+    Page:
+      description: 分页结果
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Page'}
+    Hazard:
+      description: 隐患聚合
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Hazard'}
+    Error:
+      description: 稳定错误响应
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
+  schemas:
+    ReportHazard:
+      type: object
+      required: [idempotency_key, site_id, facility_id, risk_category_id, title, description, severity, likelihood, initial_action]
+      properties:
+        idempotency_key: {type: string, minLength: 8}
+        site_id: {type: string}
+        facility_id: {type: string}
+        risk_category_id: {type: string}
+        title: {type: string}
+        description: {type: string}
+        severity: {type: integer, minimum: 1, maximum: 5}
+        likelihood: {type: integer, minimum: 1, maximum: 5}
+        impact_scopes: {type: array, items: {type: string}}
+        initial_action: {type: string}
+        evidence: {type: array, items: {type: object, additionalProperties: true}}
+    Hazard:
+      type: object
+      required: [id, queue, state, risk_level, risk_score, version]
+      properties:
+        id: {type: string}
+        queue: {type: string, enum: [normal, focus]}
+        state: {type: string, enum: [pending_confirmation, in_progress, awaiting_reinspection, resolved, closed]}
+        risk_level: {type: string, enum: [low, medium, high, critical]}
+        risk_score: {type: integer, minimum: 0, maximum: 100}
+        version: {type: integer, minimum: 1}
+        due_at: {type: string, format: date-time}
+        matched_rule: {type: object, nullable: true, additionalProperties: true}
+    Page:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {type: object, additionalProperties: true}}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer}
+    FieldError:
+      type: object
+      required: [field, message]
+      properties:
+        field: {type: string}
+        message: {type: string}
+    Error:
+      type: object
+      required: [code, message, request_id]
+      properties:
+        code: {type: string, example: VALIDATION_ERROR}
+        message: {type: string}
+        field_errors: {type: array, items: {$ref: '#/components/schemas/FieldError'}}
+        request_id: {type: string}
