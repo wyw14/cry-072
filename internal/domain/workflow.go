@@ -90,8 +90,8 @@ func (p transitionPolicy) validateClosure() error {
 	if p.request.TargetState != StateClosed || !p.hazard.IsFocus() {
 		return nil
 	}
-	if p.hazard.LastReinspectionID == "" {
-		return NewValidationError("reinspection", "重点隐患复检后才能关闭")
+	if p.hazard.PassedReinspectionAt == nil {
+		return NewValidationError("reinspection", "重点隐患必须通过复检后才能关闭")
 	}
 	return nil
 }
