@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -84,52 +85,74 @@ func (s *HazardService) mutateQueueCase(
 	meta RequestMeta,
 	change queueMutation,
 ) (domain.Hazard, error) {
-	var changed domain.Hazard
-	err := s.repository.WithinTx(ctx, func(store Store) error {
-		hazard, err := store.GetHazard(ctx, hazardID)
+	for attempt := 0; attempt < 2; attempt++ {
+		hazard, queue, err := s.loadQueueCase(ctx, hazardID)
 		if err != nil {
-			return err
+			return domain.Hazard{}, err
 		}
-		if hazard.Version != expectedVersion {
-			return domain.ErrConflict
+		if attempt == 0 && hazard.Version != expectedVersion {
+			return domain.Hazard{}, domain.ErrConflict
 		}
-		queue, err := store.GetQueueEntry(ctx, hazardID)
-		if err != nil {
-			return err
+		changed, err := s.commitQueueMutation(ctx, hazard, queue, eventType, meta, change)
+		if err == nil {
+			return changed, nil
 		}
+		if !errors.Is(err, domain.ErrConflict) || attempt == 1 {
+			return domain.Hazard{}, err
+		}
+	}
+	return domain.Hazard{}, domain.ErrConflict
+}
 
-		hazardVersion, queueVersion := hazard.Version, queue.Version
-		now := s.clock.Now()
-		audit, err := change(&hazard, &queue, now)
-		if err != nil {
-			return err
-		}
-		hazard.Version++
-		hazard.UpdatedAt = now
-		queue.Version++
-		queue.UpdatedAt = now
+func (s *HazardService) loadQueueCase(ctx context.Context, hazardID string) (domain.Hazard, domain.QueueEntry, error) {
+	hazard, err := s.repository.GetHazard(ctx, hazardID)
+	if err != nil {
+		return domain.Hazard{}, domain.QueueEntry{}, err
+	}
+	queue, err := s.repository.GetQueueEntry(ctx, hazardID)
+	if err != nil {
+		return domain.Hazard{}, domain.QueueEntry{}, err
+	}
+	return hazard, queue, nil
+}
+
+func (s *HazardService) commitQueueMutation(
+	ctx context.Context,
+	hazard domain.Hazard,
+	queue domain.QueueEntry,
+	eventType string,
+	meta RequestMeta,
+	change queueMutation,
+) (domain.Hazard, error) {
+	hazardVersion, queueVersion := hazard.Version, queue.Version
+	now := s.clock.Now()
+	audit, err := change(&hazard, &queue, now)
+	if err != nil {
+		return domain.Hazard{}, err
+	}
+	hazard.Version++
+	hazard.UpdatedAt = now
+	queue.Version++
+	queue.UpdatedAt = now
+	err = s.repository.WithinTx(ctx, func(store Store) error {
 		if err := store.UpdateHazard(ctx, hazard, hazardVersion); err != nil {
 			return err
 		}
 		if err := store.SaveQueueEntry(ctx, queue, queueVersion); err != nil {
 			return err
 		}
-		if err := store.AppendAudit(ctx, domain.AuditEvent{
+		return store.AppendAudit(ctx, domain.AuditEvent{
 			ID: s.ids.New("audit"), HazardID: hazard.ID, SiteID: hazard.SiteID,
 			EventType: eventType, ActorID: meta.ActorID, ActorRole: meta.Role,
 			RuleID: audit.ruleID, RuleVersion: audit.ruleVersion, Reason: audit.reason,
 			RequestID: meta.RequestID, SensitiveKeys: audit.sensitiveKeys,
 			Details: audit.details, OccurredAt: now,
-		}); err != nil {
-			return err
-		}
-		changed = hazard
-		return nil
+		})
 	})
 	if err != nil {
 		return domain.Hazard{}, err
 	}
-	return changed, nil
+	return hazard, nil
 }
 
 func (s *HazardService) ManualDowngrade(ctx context.Context, hazardID, reason string, expectedVersion int64, meta RequestMeta) (domain.Hazard, error) {
