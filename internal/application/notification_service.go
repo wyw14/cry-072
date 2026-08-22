@@ -29,29 +29,12 @@ func (s *NotificationService) ProcessDue(ctx context.Context, limit int) (int, e
 	if err != nil {
 		return 0, err
 	}
-	result, err := batch.dispatch(ctx, s)
-	if err != nil {
-		return result.sentCount(), err
-	}
-	if result.hasDeliveryFailures() {
-		return result.sentCount(), nil
-	}
-	return result.sentCount(), nil
+	return batch.dispatch(ctx, s)
 }
 
 type notificationBatch struct {
 	entries []domain.QueueEntry
 	now     time.Time
-}
-
-type notificationDeliveryFailure struct {
-	hazardID string
-	cause    error
-}
-
-type notificationBatchResult struct {
-	sent     int
-	failures []notificationDeliveryFailure
 }
 
 func (s *NotificationService) prepareNotificationBatch(ctx context.Context, limit int) (notificationBatch, error) {
@@ -74,40 +57,19 @@ func normalizeNotificationLimit(limit int) int {
 	return limit
 }
 
-func (b notificationBatch) dispatch(ctx context.Context, service *NotificationService) (notificationBatchResult, error) {
-	result := notificationBatchResult{failures: make([]notificationDeliveryFailure, 0)}
+// dispatch sends each due reminder in order. The first delivery failure is
+// returned to the caller so that monitoring can alert, and processing of the
+// remaining entries in the batch stops so we do not keep sending while an
+// upstream problem is unresolved.
+func (b notificationBatch) dispatch(ctx context.Context, service *NotificationService) (int, error) {
+	sent := 0
 	for _, entry := range b.entries {
 		if err := service.processEntry(ctx, entry, b.now); err != nil {
-			if isNotificationContextFailure(err) {
-				return result, err
-			}
-			result.recordFailure(entry.HazardID, err)
-			continue
+			return sent, err
 		}
-		result.sent++
+		sent++
 	}
-	return result, nil
-}
-
-func isNotificationContextFailure(err error) bool {
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
-}
-
-func (r *notificationBatchResult) recordFailure(hazardID string, cause error) {
-	r.failures = append(r.failures, notificationDeliveryFailure{hazardID: hazardID, cause: cause})
-}
-
-func (r notificationBatchResult) hasDeliveryFailures() bool {
-	for _, failure := range r.failures {
-		if failure.hazardID != "" && failure.cause != nil {
-			return true
-		}
-	}
-	return false
-}
-
-func (r notificationBatchResult) sentCount() int {
-	return r.sent
+	return sent, nil
 }
 
 func (s *NotificationService) processEntry(ctx context.Context, entry domain.QueueEntry, now time.Time) error {
