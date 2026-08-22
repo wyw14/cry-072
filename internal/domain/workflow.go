@@ -27,28 +27,71 @@ type TransitionRequest struct {
 }
 
 func ValidateTransition(h Hazard, request TransitionRequest) error {
-	if !request.TargetState.Valid() {
-		return NewValidationError("target_state", "目标状态无效")
+	policy := transitionPolicy{hazard: h, request: request}
+	checks := []func() error{
+		policy.validateTarget,
+		policy.validateEdge,
+		policy.validateActor,
+		policy.validateReviewAuthority,
+		policy.validateClosure,
 	}
-	if h.State == request.TargetState {
-		return fmt.Errorf("%w: state unchanged", ErrInvalidTransition)
-	}
-	if _, ok := allowedTransitions[h.State][request.TargetState]; !ok {
-		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, h.State, request.TargetState)
-	}
-	if request.ActorID == "" {
-		return NewValidationError("actor_id", "操作人不能为空")
-	}
-	if request.TargetState == StateResolved && !request.ActorRole.CanReview() {
-		return ErrForbidden
-	}
-	if request.TargetState == StateClosed {
-		if !request.ActorRole.CanReview() {
-			return ErrForbidden
-		}
-		if err := h.CanClose(); err != nil {
+	for _, check := range checks {
+		if err := check(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+type transitionPolicy struct {
+	hazard  Hazard
+	request TransitionRequest
+}
+
+func (p transitionPolicy) validateTarget() error {
+	if !p.request.TargetState.Valid() {
+		return NewValidationError("target_state", "目标状态无效")
+	}
+	if p.hazard.State == p.request.TargetState {
+		return fmt.Errorf("%w: state unchanged", ErrInvalidTransition)
+	}
+	return nil
+}
+
+func (p transitionPolicy) validateEdge() error {
+	next, exists := allowedTransitions[p.hazard.State]
+	if !exists {
+		return fmt.Errorf("%w: no transitions from %s", ErrInvalidTransition, p.hazard.State)
+	}
+	if _, allowed := next[p.request.TargetState]; !allowed {
+		return fmt.Errorf("%w: %s -> %s", ErrInvalidTransition, p.hazard.State, p.request.TargetState)
+	}
+	return nil
+}
+
+func (p transitionPolicy) validateActor() error {
+	if p.request.ActorID == "" {
+		return NewValidationError("actor_id", "操作人不能为空")
+	}
+	return nil
+}
+
+func (p transitionPolicy) validateReviewAuthority() error {
+	if p.request.TargetState != StateResolved && p.request.TargetState != StateClosed {
+		return nil
+	}
+	if !p.request.ActorRole.CanReview() {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (p transitionPolicy) validateClosure() error {
+	if p.request.TargetState != StateClosed || !p.hazard.IsFocus() {
+		return nil
+	}
+	if p.hazard.LastReinspectionID == "" {
+		return NewValidationError("reinspection", "重点隐患复检后才能关闭")
 	}
 	return nil
 }
