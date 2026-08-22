@@ -201,6 +201,7 @@ type siteRestorationAssessment struct {
 	pendingFocus    []string
 	handlingFocus   []string
 	reviewFocus     []string
+	resolvedFocus   []string
 }
 
 func assessSiteRestoration(hazards []domain.Hazard, currentID string) siteRestorationAssessment {
@@ -214,6 +215,11 @@ func assessSiteRestoration(hazards []domain.Hazard, currentID string) siteRestor
 	return assessment
 }
 
+// considers reports whether a hazard still blocks site restoration. Only the
+// hazard being reinspected itself, hazards that are fully closed, and
+// non-focus hazards are ignored. A focus hazard that passed reinspection but
+// has not been closed yet (StateResolved) still blocks, because it must reach
+// StateClosed before the site is safe to restore.
 func (a siteRestorationAssessment) considers(hazard domain.Hazard) bool {
 	if hazard.ID == "" || hazard.ID == a.currentHazardID {
 		return false
@@ -233,7 +239,7 @@ func (a *siteRestorationAssessment) add(hazard domain.Hazard) {
 	case domain.StateReview:
 		a.reviewFocus = append(a.reviewFocus, hazard.ID)
 	case domain.StateResolved:
-		return
+		a.resolvedFocus = append(a.resolvedFocus, hazard.ID)
 	}
 }
 
@@ -242,10 +248,11 @@ func (a siteRestorationAssessment) blocksRestoration() bool {
 }
 
 func (a siteRestorationAssessment) activeFocusIDs() []string {
-	total := len(a.pendingFocus) + len(a.handlingFocus) + len(a.reviewFocus)
+	total := len(a.pendingFocus) + len(a.handlingFocus) + len(a.reviewFocus) + len(a.resolvedFocus)
 	result := make([]string, 0, total)
 	result = append(result, a.pendingFocus...)
 	result = append(result, a.handlingFocus...)
 	result = append(result, a.reviewFocus...)
+	result = append(result, a.resolvedFocus...)
 	return result
 }
