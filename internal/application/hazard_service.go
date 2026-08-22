@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,23 +84,24 @@ func (s *HazardService) mutateQueueCase(
 	meta RequestMeta,
 	change queueMutation,
 ) (domain.Hazard, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		hazard, queue, err := s.loadQueueCase(ctx, hazardID)
-		if err != nil {
-			return domain.Hazard{}, err
-		}
-		if attempt == 0 && hazard.Version != expectedVersion {
-			return domain.Hazard{}, domain.ErrConflict
-		}
-		changed, err := s.commitQueueMutation(ctx, hazard, queue, eventType, meta, change)
-		if err == nil {
-			return changed, nil
-		}
-		if !errors.Is(err, domain.ErrConflict) || attempt == 1 {
-			return domain.Hazard{}, err
-		}
+	hazard, queue, err := s.loadQueueCase(ctx, hazardID)
+	if err != nil {
+		return domain.Hazard{}, err
 	}
-	return domain.Hazard{}, domain.ErrConflict
+	// Optimistic concurrency: a stale client view must surface a conflict so the
+	// caller can re-read and decide. Retrying by reloading the latest version and
+	// re-applying the change would silently overwrite a concurrent winner — two
+	// supervisors could both "succeed" assigning the same hazard while only the
+	// last write survives. The transaction's version guard is the single source of
+	// truth; a commit-time conflict is returned instead of resolved.
+	if hazard.Version != expectedVersion {
+		return domain.Hazard{}, domain.ErrConflict
+	}
+	changed, err := s.commitQueueMutation(ctx, hazard, queue, eventType, meta, change)
+	if err != nil {
+		return domain.Hazard{}, err
+	}
+	return changed, nil
 }
 
 func (s *HazardService) loadQueueCase(ctx context.Context, hazardID string) (domain.Hazard, domain.QueueEntry, error) {
