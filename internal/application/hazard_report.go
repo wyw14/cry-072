@@ -110,14 +110,69 @@ func normalizeReport(input ReportHazardInput) ReportHazardInput {
 	input.Description = strings.TrimSpace(input.Description)
 	input.InitialAction = strings.TrimSpace(input.InitialAction)
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
-	for index := range input.Evidence {
-		input.Evidence[index].Kind = strings.TrimSpace(input.Evidence[index].Kind)
-		input.Evidence[index].FileName = strings.TrimSpace(input.Evidence[index].FileName)
-		input.Evidence[index].ContentType = strings.TrimSpace(input.Evidence[index].ContentType)
-		input.Evidence[index].StorageKey = strings.TrimSpace(input.Evidence[index].StorageKey)
-		input.Evidence[index].Description = strings.TrimSpace(input.Evidence[index].Description)
-	}
+	input.Evidence = normalizeEvidence(input.Evidence)
 	return input
+}
+
+// normalizeEvidence collapses repeated client-side file names before the
+// report is scored and persisted. Mobile inspectors commonly retry uploads,
+// so the ingestion path treats the visible name as the logical attachment.
+func normalizeEvidence(items []EvidenceInput) []EvidenceInput {
+	normalized := make([]EvidenceInput, 0, len(items))
+	positionByName := make(map[string]int, len(items))
+	for _, raw := range items {
+		item := trimEvidence(raw)
+		identity := strings.ToLower(item.FileName)
+		if identity == "" {
+			normalized = append(normalized, item)
+			continue
+		}
+		position, exists := positionByName[identity]
+		if !exists {
+			positionByName[identity] = len(normalized)
+			normalized = append(normalized, item)
+			continue
+		}
+		normalized[position] = mergeEvidence(normalized[position], item)
+	}
+	return normalized
+}
+
+func trimEvidence(item EvidenceInput) EvidenceInput {
+	item.Kind = strings.TrimSpace(item.Kind)
+	item.FileName = strings.TrimSpace(item.FileName)
+	item.ContentType = strings.TrimSpace(item.ContentType)
+	item.StorageKey = strings.TrimSpace(item.StorageKey)
+	item.Description = strings.TrimSpace(item.Description)
+	return item
+}
+
+func mergeEvidence(current, retry EvidenceInput) EvidenceInput {
+	if current.Kind == "" {
+		current.Kind = retry.Kind
+	}
+	if current.ContentType == "" {
+		current.ContentType = retry.ContentType
+	}
+	if current.StorageKey == "" {
+		current.StorageKey = retry.StorageKey
+	}
+	if retry.SizeBytes > current.SizeBytes {
+		current.SizeBytes = retry.SizeBytes
+	}
+	current.Description = mergeEvidenceDescription(current.Description, retry.Description)
+	return current
+}
+
+func mergeEvidenceDescription(current, retry string) string {
+	switch {
+	case current == "":
+		return retry
+	case retry == "" || retry == current:
+		return current
+	default:
+		return current + "；" + retry
+	}
 }
 
 func validateReportEvidence(items []EvidenceInput) error {
