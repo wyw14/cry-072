@@ -140,29 +140,75 @@ func (s *HazardService) ManualDowngrade(ctx context.Context, hazardID, reason st
 	if len(reason) < 10 {
 		return domain.Hazard{}, domain.NewValidationError("reason", "人工降级理由至少十个字符")
 	}
-	changed, err := s.mutateQueueCase(ctx, hazardID, expectedVersion, "hazard.downgraded", meta, func(hazard *domain.Hazard, queue *domain.QueueEntry, now time.Time) (queueMutationAudit, error) {
-		if !hazard.Escalated || hazard.Queue != domain.QueueFocus {
-			return queueMutationAudit{}, domain.NewValidationError("queue", "只有自动升级的重点隐患可以人工降级")
-		}
-		audit := queueMutationAudit{
-			reason: reason, ruleID: hazard.MatchedRuleID, ruleVersion: hazard.MatchedRuleVersion,
-			details: map[string]any{
-				"previous_evidence": append([]string(nil), hazard.MatchedRuleEvidence...),
-				"to_queue":          domain.QueueNormal,
-			},
-		}
-		hazard.Queue = domain.QueueNormal
-		hazard.Escalated = false
-		hazard.EscalationReason = reason
-		queue.Queue = domain.QueueNormal
-		queue.EscalationTier = 0
-		queue.NextNotifyAt = now.Add(24 * time.Hour)
-		return audit, nil
-	})
+	changed, err := s.mutateQueueCase(
+		ctx,
+		hazardID,
+		expectedVersion,
+		"hazard.downgraded",
+		meta,
+		func(hazard *domain.Hazard, queue *domain.QueueEntry, now time.Time) (queueMutationAudit, error) {
+			outcome, err := prepareDowngrade(hazard, queue, reason, now)
+			if err != nil {
+				return queueMutationAudit{}, err
+			}
+			outcome.apply(hazard, queue)
+			return outcome.audit(), nil
+		},
+	)
 	if err != nil {
 		return domain.Hazard{}, fmt.Errorf("downgrade hazard: %w", err)
 	}
 	return changed, nil
+}
+
+type downgradeOutcome struct {
+	reason       string
+	nextNotifyAt time.Time
+	ruleID       string
+	ruleVersion  int64
+	evidence     []string
+}
+
+func prepareDowngrade(
+	hazard *domain.Hazard,
+	queue *domain.QueueEntry,
+	reason string,
+	now time.Time,
+) (downgradeOutcome, error) {
+	if hazard == nil || queue == nil {
+		return downgradeOutcome{}, domain.NewValidationError("hazard", "降级对象不能为空")
+	}
+	if !hazard.Escalated || hazard.Queue != domain.QueueFocus || queue.Queue != domain.QueueFocus {
+		return downgradeOutcome{}, domain.NewValidationError("queue", "只有自动升级的重点隐患可以人工降级")
+	}
+	return downgradeOutcome{
+		reason:       reason,
+		nextNotifyAt: now.Add(24 * time.Hour),
+	}, nil
+}
+
+func (d downgradeOutcome) apply(hazard *domain.Hazard, queue *domain.QueueEntry) {
+	hazard.Queue = domain.QueueNormal
+	hazard.Escalated = false
+	hazard.EscalationReason = d.reason
+	hazard.MatchedRuleID = ""
+	hazard.MatchedRuleVersion = 0
+	hazard.MatchedRuleEvidence = nil
+	queue.Queue = domain.QueueNormal
+	queue.EscalationTier = 0
+	queue.NextNotifyAt = d.nextNotifyAt
+}
+
+func (d downgradeOutcome) audit() queueMutationAudit {
+	return queueMutationAudit{
+		reason:      d.reason,
+		ruleID:      d.ruleID,
+		ruleVersion: d.ruleVersion,
+		details: map[string]any{
+			"previous_evidence": append([]string(nil), d.evidence...),
+			"to_queue":          domain.QueueNormal,
+		},
+	}
 }
 
 func (s *HazardService) AssignOwner(ctx context.Context, hazardID, ownerID string, expectedVersion int64, meta RequestMeta) (domain.Hazard, error) {
