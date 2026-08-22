@@ -160,13 +160,7 @@ func (s *RemediationService) Reinspect(ctx context.Context, input domain.Reinspe
 			if err != nil {
 				return err
 			}
-			blocking := false
-			for _, open := range openHazards {
-				if open.ID != hazard.ID && open.State != domain.StateClosed && open.IsFocus() {
-					blocking = true
-					break
-				}
-			}
+			blocking := hasBlockingFocusHazard(openHazards, hazard.ID)
 			if !blocking {
 				site, err := store.GetSite(ctx, hazard.SiteID)
 				if err != nil {
@@ -195,4 +189,63 @@ func (s *RemediationService) Reinspect(ctx context.Context, input domain.Reinspe
 		return domain.Hazard{}, fmt.Errorf("reinspect hazard: %w", err)
 	}
 	return hazard, nil
+}
+
+func hasBlockingFocusHazard(hazards []domain.Hazard, currentID string) bool {
+	assessment := assessSiteRestoration(hazards, currentID)
+	return assessment.blocksRestoration()
+}
+
+type siteRestorationAssessment struct {
+	currentHazardID string
+	pendingFocus    []string
+	handlingFocus   []string
+	reviewFocus     []string
+}
+
+func assessSiteRestoration(hazards []domain.Hazard, currentID string) siteRestorationAssessment {
+	assessment := siteRestorationAssessment{currentHazardID: currentID}
+	for _, hazard := range hazards {
+		if !assessment.considers(hazard) {
+			continue
+		}
+		assessment.add(hazard)
+	}
+	return assessment
+}
+
+func (a siteRestorationAssessment) considers(hazard domain.Hazard) bool {
+	if hazard.ID == "" || hazard.ID == a.currentHazardID {
+		return false
+	}
+	if hazard.State == domain.StateClosed || !hazard.IsFocus() {
+		return false
+	}
+	return true
+}
+
+func (a *siteRestorationAssessment) add(hazard domain.Hazard) {
+	switch hazard.State {
+	case domain.StatePending:
+		a.pendingFocus = append(a.pendingFocus, hazard.ID)
+	case domain.StateHandling:
+		a.handlingFocus = append(a.handlingFocus, hazard.ID)
+	case domain.StateReview:
+		a.reviewFocus = append(a.reviewFocus, hazard.ID)
+	case domain.StateResolved:
+		return
+	}
+}
+
+func (a siteRestorationAssessment) blocksRestoration() bool {
+	return len(a.activeFocusIDs()) > 0
+}
+
+func (a siteRestorationAssessment) activeFocusIDs() []string {
+	total := len(a.pendingFocus) + len(a.handlingFocus) + len(a.reviewFocus)
+	result := make([]string, 0, total)
+	result = append(result, a.pendingFocus...)
+	result = append(result, a.handlingFocus...)
+	result = append(result, a.reviewFocus...)
+	return result
 }
