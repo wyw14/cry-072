@@ -114,22 +114,25 @@ func normalizeReport(input ReportHazardInput) ReportHazardInput {
 	return input
 }
 
-// normalizeEvidence collapses repeated client-side file names before the
-// report is scored and persisted. Mobile inspectors commonly retry uploads,
-// so the ingestion path treats the visible name as the logical attachment.
+// normalizeEvidence collapses retries of the same upload before the report is
+// scored and persisted. Mobile inspectors commonly retry uploads; two retries
+// of one photo resolve to the same content-addressed storage object and must
+// be folded into a single evidence record. The storage object key is the
+// attachment identity, never the visible file name: photos from different
+// points often share an original file name (e.g. IMG_0001.jpg) yet point at
+// distinct storage objects, and must be kept as separate evidence.
 func normalizeEvidence(items []EvidenceInput) []EvidenceInput {
 	normalized := make([]EvidenceInput, 0, len(items))
-	positionByName := make(map[string]int, len(items))
+	positionByKey := make(map[string]int, len(items))
 	for _, raw := range items {
 		item := trimEvidence(raw)
-		identity := strings.ToLower(item.FileName)
-		if identity == "" {
+		if item.StorageKey == "" {
 			normalized = append(normalized, item)
 			continue
 		}
-		position, exists := positionByName[identity]
+		position, exists := positionByKey[item.StorageKey]
 		if !exists {
-			positionByName[identity] = len(normalized)
+			positionByKey[item.StorageKey] = len(normalized)
 			normalized = append(normalized, item)
 			continue
 		}
