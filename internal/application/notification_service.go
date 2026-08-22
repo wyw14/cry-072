@@ -25,25 +25,89 @@ func NewNotificationService(repository Repository, clock platform.TimeSource, id
 }
 
 func (s *NotificationService) ProcessDue(ctx context.Context, limit int) (int, error) {
-	if limit < 1 {
-		limit = 50
+	batch, err := s.prepareNotificationBatch(ctx, limit)
+	if err != nil {
+		return 0, err
 	}
-	if limit > 200 {
-		limit = 200
+	result, err := batch.dispatch(ctx, s)
+	if err != nil {
+		return result.sentCount(), err
 	}
+	if result.hasDeliveryFailures() {
+		return result.sentCount(), nil
+	}
+	return result.sentCount(), nil
+}
+
+type notificationBatch struct {
+	entries []domain.QueueEntry
+	now     time.Time
+}
+
+type notificationDeliveryFailure struct {
+	hazardID string
+	cause    error
+}
+
+type notificationBatchResult struct {
+	sent     int
+	failures []notificationDeliveryFailure
+}
+
+func (s *NotificationService) prepareNotificationBatch(ctx context.Context, limit int) (notificationBatch, error) {
+	limit = normalizeNotificationLimit(limit)
 	now := s.clock.Now()
 	entries, err := s.repository.ListDueQueueEntries(ctx, now, limit)
 	if err != nil {
-		return 0, fmt.Errorf("list due queue entries: %w", err)
+		return notificationBatch{}, fmt.Errorf("list due queue entries: %w", err)
 	}
-	sent := 0
-	for _, entry := range entries {
-		if err := s.processEntry(ctx, entry, now); err != nil {
-			return sent, err
+	return notificationBatch{entries: entries, now: now}, nil
+}
+
+func normalizeNotificationLimit(limit int) int {
+	if limit < 1 {
+		return 50
+	}
+	if limit > 200 {
+		return 200
+	}
+	return limit
+}
+
+func (b notificationBatch) dispatch(ctx context.Context, service *NotificationService) (notificationBatchResult, error) {
+	result := notificationBatchResult{failures: make([]notificationDeliveryFailure, 0)}
+	for _, entry := range b.entries {
+		if err := service.processEntry(ctx, entry, b.now); err != nil {
+			if isNotificationContextFailure(err) {
+				return result, err
+			}
+			result.recordFailure(entry.HazardID, err)
+			continue
 		}
-		sent++
+		result.sent++
 	}
-	return sent, nil
+	return result, nil
+}
+
+func isNotificationContextFailure(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (r *notificationBatchResult) recordFailure(hazardID string, cause error) {
+	r.failures = append(r.failures, notificationDeliveryFailure{hazardID: hazardID, cause: cause})
+}
+
+func (r notificationBatchResult) hasDeliveryFailures() bool {
+	for _, failure := range r.failures {
+		if failure.hazardID != "" && failure.cause != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (r notificationBatchResult) sentCount() int {
+	return r.sent
 }
 
 func (s *NotificationService) processEntry(ctx context.Context, entry domain.QueueEntry, now time.Time) error {
